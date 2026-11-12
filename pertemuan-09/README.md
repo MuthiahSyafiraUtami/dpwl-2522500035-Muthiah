@@ -84,3 +84,23 @@ Bukti pembayaran disimpan menggunakan nama file yang dibuat secara acak untuk me
 ## 7. Kesimpulan
 
 Fitur pembayaran awal dan verifikasi pembayaran telah berhasil dikembangkan dan diuji pada proses upload bukti pembayaran, penerimaan pembayaran, penolakan pembayaran, serta pembatasan hak akses admin dan penyewa.
+
+## Dokumentasi Screenshot
+
+### 1. Halaman Pembayaran 
+![Halaman Pembayaran](dokumentasi/01 - halaman pembayaran.png)
+
+### 2. Bukti Pembayaran Valid
+![Bukti Pembayaran Valid](dokumentasi/02 - bukti pembayaran valid.png)
+
+### 3. Bukti Pembayaran Invalid
+![Bukti Pembayaran Invalid](dokumentasi/03 - bukti pembayaran invalid.png)
+
+### 4. Daftar Pembayaran Menunggu Verifikasi Admin
+![Daftar Pembayaran Menunggu Verifikasi Admin](dokumentasi/04 - daftar pembayaran menunggu verifikasi admin.png)
+
+### 5. Daftar Pembayaran Diterima Admin
+![Daftar Pembayaran Diterima Admin](dokumentasi/05 - daftar pembayaran diterima admin.png)
+
+### 6. Daftar Pembayaran Setelah Diterima Admin
+![Daftar Pembayaran Setelah Diterima Admin](dokumentasi/06-pembayaran-tanpa-bukti.png)
