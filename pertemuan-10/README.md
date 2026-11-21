@@ -1,6 +1,6 @@
 # pertemuan-10
 
-### Perubahan Database 
+### A. Perubahan Database 
 
 Pada tabel `t_sewa`, kolom `status_sewa` mengalami penambahan nilai ENUM `lunas`.
 
