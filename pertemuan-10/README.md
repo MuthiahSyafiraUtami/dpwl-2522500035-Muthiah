@@ -160,7 +160,7 @@ Selain itu, halaman ini menyediakan form untuk memproses pelunasan apabila trans
 ![Halaman Pembayaran](dokumentasi/Detail_Transaksi.png)
 
 ### 2. Halaman Pelunasan Via TF
-![Halaman Pembayaran](dokumentasi/Pelunasan_Via Tf.png)
+![Halaman Pembayaran](dokumentasi/Pelunasan_Tf.png)
 
 ### 3. Halaman Detail Transaksi Lunas yang berhasil ditampilkan
 ![Halaman Pembayaran](dokumentasi/Transaksi_Lunas_1.png)
