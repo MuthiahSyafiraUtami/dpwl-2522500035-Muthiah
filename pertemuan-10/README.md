@@ -38,3 +38,23 @@ Digunakan untuk membuat kode pembayaran pelunasan secara otomatis dengan format 
 Digunakan untuk memproses dan menyimpan pembayaran pelunasan ke database. Method ini melakukan validasi transaksi, metode pembayaran, nominal pelunasan, dan mencegah pembayaran dilakukan lebih dari satu kali.
 
 Setelah pelunasan berhasil disimpan, status transaksi penyewaan diperbarui menjadi lunas.
+
+### 3. Penambahan Method pada Pembayaran_controller
+
+File: application/controllers/Pembayaran_controller.php
+
+#### 3.1 pelunasanIndex()
+
+Digunakan untuk menampilkan halaman daftar transaksi penyewaan yang memiliki kewajiban pelunasan. Method ini hanya dapat diakses oleh admin dan mengambil data melalui method getDaftarPelunasan() pada Pembayaran_model.
+
+#### 3.2 pelunasanDetail (string $kodeSewa)
+
+Digunakan untuk menampilkan detail transaksi penyewaan berdasarkan kode sewa. Informasi yang ditampilkan meliputi data penyewa, kendaraan, periode sewa, riwayat pembayaran, dan sisa tagihan yang harus dilunasi.
+
+#### 3.3 prosesPelunasan (string $kodeSewa)
+
+Digunakan untuk memproses pembayaran pelunasan oleh admin. Method ini melakukan validasi metode pembayaran, memproses unggahan bukti pembayaran apabila menggunakan transfer, kemudian menyimpan data pelunasan melalui simpanPelunasan() pada Pembayaran_model.
+
+#### 3.4 dokumenTransaksi()
+
+Digunakan untuk menangani akses dokumen transaksi sebagai bukti administrasi penyewaan.
