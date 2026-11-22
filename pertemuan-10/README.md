@@ -58,3 +58,75 @@ Digunakan untuk memproses pembayaran pelunasan oleh admin. Method ini melakukan 
 #### 3.4 dokumenTransaksi()
 
 Digunakan untuk menangani akses dokumen transaksi sebagai bukti administrasi penyewaan.
+
+#### 3.5 Integrasi Helper dan Upload Bukti Pelunasan
+
+Ditambahkan pemanggilan `auth_helper.php` dan `flash_helper.php` pada constructor `Pembayaran_controller` untuk mendukung pemeriksaan hak akses admin dan pengelolaan pesan notifikasi.
+
+Selain itu, ditambahkan method bantuan:
+
+- `simpanFileBukti()` digunakan untuk mengunggah dan memvalidasi bukti transfer pelunasan.
+- `hapusBuktiBaru()` digunakan untuk menghapus file bukti yang sudah diunggah apabila proses penyimpanan pelunasan ke database gagal.
+
+### 4. Penambahan Route
+
+Pada file konfigurasi route, dilakukan penambahan empat route untuk menghubungkan fitur pelunasan dengan method pada `Pembayaran_controller`.
+
+#### 4.1 Route Daftar Pelunasan
+
+```php
+$route['admin/pembayaran/pelunasan'] = 'Pembayaran_controller/pelunasanIndex';
+```
+
+Digunakan untuk mengakses halaman daftar transaksi yang memiliki kewajiban pelunasan.
+
+#### 4.2 Route Detail Pelunasan
+
+```php
+$route['admin/pembayaran/pelunasan/(:any)'] = 'Pembayaran_controller/pelunasanDetail/$1';
+```
+
+Digunakan untuk menampilkan detail pelunasan berdasarkan kode sewa.
+
+#### 4.3 Route Proses Pelunasan
+
+```php
+$route['admin/pembayaran/pelunasan/proses/(:any)'] = 'Pembayaran_controller/prosesPelunasan/$1';
+```
+
+Digunakan untuk memproses pembayaran pelunasan berdasarkan kode sewa melalui metode POST.
+
+#### 4.4 Route Dokumen Transaksi
+
+```php
+$route['admin/pembayaran/dokumen/(:any)'] = 'Pembayaran_controller/dokumenTransaksi/$1';
+```
+
+Digunakan untuk mengakses dokumen transaksi berdasarkan kode sewa.
+
+### 5. Integrasi Menu Pelunasan pada Sidebar Admin
+
+Dilakukan penambahan menu **Pelunasan** pada sidebar admin agar admin dapat mengakses fitur pengelolaan pelunasan secara langsung.
+
+Menu Pelunasan diarahkan ke route:
+
+```php
+site_url('admin/pembayaran/pelunasan')
+```
+
+Melalui menu tersebut, admin dapat melihat daftar transaksi yang memiliki sisa kewajiban pembayaran, membuka detail transaksi, memproses pelunasan, dan mengakses dokumen transaksi.
+
+### 6. Hasil Pemeriksaan Route dan Navigasi
+
+Pemeriksaan dilakukan untuk memastikan route dan navigasi fitur pelunasan telah terhubung dengan method yang sesuai pada `Pembayaran_controller`.
+
+Hal-hal yang diperiksa meliputi:
+
+1. Route daftar pelunasan untuk menampilkan daftar transaksi yang memiliki sisa pembayaran.
+2. Route detail pelunasan untuk menampilkan informasi transaksi berdasarkan kode sewa.
+3. Route proses pelunasan untuk mengirimkan data pembayaran melalui metode POST.
+4. Route dokumen transaksi untuk menampilkan dokumen transaksi berdasarkan kode sewa.
+5. Menu Pelunasan pada sidebar admin untuk mengakses halaman daftar pelunasan.
+6. Pembatasan akses menggunakan `require_admin_login()` pada seluruh method pelunasan dan dokumen transaksi.
+
+**Kesimpulan:** Penambahan route dan integrasi menu sidebar dilakukan untuk menghubungkan seluruh fitur pelunasan sehingga dapat diakses melalui navigasi admin sesuai dengan fungsinya.
