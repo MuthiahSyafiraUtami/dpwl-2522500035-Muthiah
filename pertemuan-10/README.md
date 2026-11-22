@@ -116,17 +116,40 @@ site_url('admin/pembayaran/pelunasan')
 
 Melalui menu tersebut, admin dapat melihat daftar transaksi yang memiliki sisa kewajiban pembayaran, membuka detail transaksi, memproses pelunasan, dan mengakses dokumen transaksi.
 
-### 6. Hasil Pemeriksaan Route dan Navigasi
+### 6. Penambahan View Daftar dan Detail Pelunasan
 
-Pemeriksaan dilakukan untuk memastikan route dan navigasi fitur pelunasan telah terhubung dengan method yang sesuai pada `Pembayaran_controller`.
+Ditambahkan dua file view pada folder `application/views/admin/` untuk mendukung tampilan fitur pelunasan transaksi.
 
-Hal-hal yang diperiksa meliputi:
+#### 6.1 View Daftar Pelunasan (`pelunasan.php`)
 
-1. Route daftar pelunasan untuk menampilkan daftar transaksi yang memiliki sisa pembayaran.
-2. Route detail pelunasan untuk menampilkan informasi transaksi berdasarkan kode sewa.
-3. Route proses pelunasan untuk mengirimkan data pembayaran melalui metode POST.
-4. Route dokumen transaksi untuk menampilkan dokumen transaksi berdasarkan kode sewa.
-5. Menu Pelunasan pada sidebar admin untuk mengakses halaman daftar pelunasan.
-6. Pembatasan akses menggunakan `require_admin_login()` pada seluruh method pelunasan dan dokumen transaksi.
+Digunakan untuk menampilkan daftar transaksi penyewaan yang masih memiliki sisa kewajiban pembayaran.
 
-**Kesimpulan:** Penambahan route dan integrasi menu sidebar dilakukan untuk menghubungkan seluruh fitur pelunasan sehingga dapat diakses melalui navigasi admin sesuai dengan fungsinya.
+Informasi yang ditampilkan meliputi:
+
+- Kode sewa.
+- Nama penyewa.
+- Nomor HP.
+- Periode sewa.
+- Status transaksi.
+- Total transaksi.
+- Total terbayar.
+- Sisa kewajiban.
+- Aksi untuk melihat detail pelunasan.
+
+Apabila tidak terdapat transaksi yang memiliki sisa kewajiban, sistem akan menampilkan pesan bahwa tidak ada transaksi yang dapat diproses pelunasannya.
+
+#### 6.2 View Detail Pelunasan (`pelunasan_detail.php`)
+
+Digunakan untuk menampilkan informasi detail transaksi penyewaan dan riwayat pembayaran berdasarkan kode sewa.
+
+Informasi yang ditampilkan meliputi:
+
+- Data penyewa.
+- Kode dan periode sewa.
+- Informasi kendaraan yang disewa.
+- Total transaksi.
+- Total pembayaran yang telah dilakukan.
+- Sisa kewajiban pembayaran.
+- Riwayat pembayaran.
+
+Selain itu, halaman ini menyediakan form untuk memproses pelunasan apabila transaksi masih memiliki sisa kewajiban dan memenuhi ketentuan pelunasan.
