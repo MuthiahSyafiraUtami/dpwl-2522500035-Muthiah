@@ -1,0 +1,1799 @@
+<?php
+class Pembayaran_model
+{
+    private mysqli $db;
+
+    public function __construct()
+    {
+        global $db;
+        $this->db = $db;
+    }
+
+    private function ambilKunci(
+        string $namaKunci,
+        int $timeout = 10
+    ): void {
+        $stmt = $this->db->prepare(
+            'SELECT GET_LOCK(?, ?) AS lock_status'
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException(
+                'Kunci proses gagal disiapkan.'
+            );
+        }
+
+        $stmt->bind_param('si', $namaKunci, $timeout);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            throw new RuntimeException(
+                'Kunci proses gagal dijalankan.'
+            );
+        }
+
+        $hasil = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if ((int) ($hasil['lock_status'] ?? 0) !== 1) {
+            throw new RuntimeException(
+                'Kunci proses tidak diperoleh. Silakan coba lagi.'
+            );
+        }
+    }
+
+    private function lepasKunci(string $namaKunci): void
+    {
+        $stmt = $this->db->prepare(
+            'SELECT RELEASE_LOCK(?)'
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException(
+                'Pelepasan kunci proses gagal disiapkan.'
+            );
+        }
+
+        $stmt->bind_param('s', $namaKunci);
+        $berhasil = $stmt->execute();
+        $stmt->close();
+
+        if (!$berhasil) {
+            throw new RuntimeException(
+                'Pelepasan kunci proses gagal dijalankan.'
+            );
+        }
+    }
+
+    private function kunciDanBuatKodeSewa(): array
+    {
+        $tanggal = (
+            new DateTimeImmutable(
+                'now',
+                new DateTimeZone('Asia/Jakarta')
+            )
+        )->format('Ymd');
+
+        $prefix = 'INV/' . $tanggal . '/';
+        $namaKunci = 'dpwl_inv_' . $tanggal;
+
+        $this->ambilKunci($namaKunci);
+
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT kode_sewa
+                FROM t_sewa
+                WHERE kode_sewa LIKE ?
+                ORDER BY kode_sewa DESC
+                LIMIT 1"
+            );
+
+            if (!$stmt) {
+                throw new RuntimeException(
+                    'Pencarian nomor transaksi gagal disiapkan.'
+                );
+            }
+
+            $pola = $prefix . '%';
+            $stmt->bind_param('s', $pola);
+
+            if (!$stmt->execute()) {
+                $stmt->close();
+                throw new RuntimeException(
+                    'Pencarian nomor transaksi gagal dijalankan.'
+                );
+            }
+
+            $baris = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+
+            $nomorTerakhir = $baris === null
+                ? 0
+                : (int) substr($baris['kode_sewa'], -2);
+
+            $nomorBerikutnya = $nomorTerakhir + 1;
+
+            if ($nomorBerikutnya > 99) {
+                throw new RuntimeException(
+                    'Nomor transaksi harian telah mencapai batas 99.'
+                );
+            }
+
+            return [
+                'kode_sewa' => $prefix . str_pad(
+                    (string) $nomorBerikutnya,
+                    2,
+                    '0',
+                    STR_PAD_LEFT
+                ),
+                'nama_kunci' => $namaKunci
+            ];
+        } catch (Throwable $e) {
+            $this->lepasKunci($namaKunci);
+            throw $e;
+        }
+    }
+
+    public function getJumlahMobilKeranjang(string $userPlg): int
+{
+$userPlg = trim($userPlg);
+if ($userPlg === '') {
+return 0;
+}
+$stmt = $this->db->prepare(
+"SELECT COUNT(*) AS jumlah
+FROM t_pilih p
+INNER JOIN t_sewa s ON s.kode_sewa = p.kode_sewa
+WHERE s.user_plg = ?
+AND s.status_sewa = 'keranjang'"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Penghitungan kendaraan dalam keranjang gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Penghitungan kendaraan dalam keranjang gagal dijalankan.'
+);
+}
+$hasil = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+return (int) ($hasil['jumlah'] ?? 0);
+}
+
+private function namaKunciKeranjang(string $userPlg): string
+{
+return 'dpwl_cart_' . substr(hash('sha256', $userPlg), 0, 48);
+}
+private function kunciKendaraan(string $noPlat): array
+{
+$stmt = $this->db->prepare(
+"SELECT no_plat, hrg_hari, status_unit
+FROM t_mobil
+WHERE no_plat = ?
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Query penguncian kendaraan gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $noPlat);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Penguncian kendaraan gagal dijalankan.'
+);
+}
+$kendaraan = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ($kendaraan === null) {
+throw new RuntimeException('Kendaraan tidak ditemukan.');
+}
+return $kendaraan;
+}
+
+private function hitungHariSewa(
+string $tglMulai,
+string $tglSelesai
+): int {
+$mulai = DateTimeImmutable::createFromFormat('!Y-m-d', $tglMulai);
+$errorMulai = DateTimeImmutable::getLastErrors();
+if (
+$mulai === false ||
+(
+$errorMulai !== false &&
+(
+$errorMulai['warning_count'] > 0 ||
+$errorMulai['error_count'] > 0
+)
+) ||
+$mulai->format('Y-m-d') !== $tglMulai
+) {
+throw new InvalidArgumentException(
+'Tanggal mulai tidak valid.'
+);
+}
+$selesai = DateTimeImmutable::createFromFormat(
+'!Y-m-d',
+$tglSelesai
+);
+$errorSelesai = DateTimeImmutable::getLastErrors();
+if (
+$selesai === false ||
+(
+$errorSelesai !== false &&
+(
+$errorSelesai['warning_count'] > 0 ||
+$errorSelesai['error_count'] > 0
+)
+) ||
+$selesai->format('Y-m-d') !== $tglSelesai
+) {
+throw new InvalidArgumentException(
+'Tanggal selesai tidak valid.'
+);
+}
+if ($selesai <= $mulai) {
+throw new InvalidArgumentException(
+'Tanggal selesai harus setelah tanggal mulai.'
+);
+}
+$hari = (int) $mulai->diff($selesai)->days;
+if ($hari < 1 || $hari > 127) {
+throw new InvalidArgumentException(
+'Lama sewa harus antara 1 dan 127 hari.'
+);
+}
+return $hari;
+}
+private function normalisasiWaktu(string $waktu): string
+{
+foreach (['H:i:s', 'H:i'] as $format) {
+$hasil = DateTimeImmutable::createFromFormat(
+'!' . $format,
+$waktu
+);
+$errors = DateTimeImmutable::getLastErrors();
+if (
+$hasil !== false &&
+(
+$errors === false ||
+(
+$errors['warning_count'] === 0 &&
+$errors['error_count'] === 0
+)
+) &&
+$hasil->format($format) === $waktu
+) {
+return $hasil->format('H:i:s');
+}
+}
+throw new InvalidArgumentException(
+'Waktu pengambilan tidak valid.'
+);
+}
+
+public function tambahKeKeranjang(
+string $userPlg,
+string $noPlat
+): string {
+$userPlg = trim($userPlg);
+
+$noPlat = trim($noPlat);
+if ($userPlg === '' || $noPlat === '') {
+throw new InvalidArgumentException(
+'Identitas penyewa dan kendaraan wajib diisi.'
+);
+}
+$this->db->begin_transaction();
+$namaKunci = null;
+$namaKunciKeranjang = null;
+$kunciKeranjangDidapat = false;
+try {
+$kendaraan = $this->kunciKendaraan($noPlat);
+if ($kendaraan['status_unit'] !== 'tersedia') {
+throw new RuntimeException(
+'Kendaraan tidak berstatus tersedia.'
+);
+}
+$namaKunciKeranjang = $this->namaKunciKeranjang($userPlg);
+$this->ambilKunci($namaKunciKeranjang);
+$kunciKeranjangDidapat = true;
+$stmt = $this->db->prepare(
+"SELECT kode_sewa, tgl_mulai, tgl_selesai, wkt_ambil
+FROM t_sewa
+WHERE user_plg = ?
+AND status_sewa = 'keranjang'
+ORDER BY kode_sewa ASC
+LIMIT 1
+FOR UPDATE"
+);
+
+if (!$stmt) {
+throw new RuntimeException(
+'Pencarian keranjang aktif gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pencarian keranjang aktif gagal dijalankan.'
+);
+}
+$keranjang = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ($keranjang !== null) {
+$kodeSewa = (string) $keranjang['kode_sewa'];
+$tglMulai = (string) $keranjang['tgl_mulai'];
+$tglSelesai = (string) $keranjang['tgl_selesai'];
+$wktAmbil = $this->normalisasiWaktu(
+(string) $keranjang['wkt_ambil']
+);
+} else {
+$sekarang = new DateTimeImmutable('now');
+$tglMulai = $sekarang->format('Y-m-d');
+$tglSelesai = $sekarang->modify('+1 day')->format('Y-m-d');
+$wktAmbil = $sekarang->format('H:i:s');
+$dataKode = $this->kunciDanBuatKodeSewa();
+$kodeSewa = $dataKode['kode_sewa'];
+$namaKunci = $dataKode['nama_kunci'];
+
+$stmt = $this->db->prepare(
+"INSERT INTO t_sewa (
+kode_sewa,
+tgl_mulai,
+tgl_selesai,
+wkt_ambil,
+status_sewa,
+user_plg
+) VALUES (?, ?, ?, ?, 'keranjang', ?)"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembuatan transaksi gagal disiapkan.'
+);
+}
+$stmt->bind_param(
+'sssss',
+$kodeSewa,
+$tglMulai,
+$tglSelesai,
+$wktAmbil,
+$userPlg
+);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Transaksi keranjang gagal dibuat.'
+);
+}
+
+$stmt->close();
+}
+ // Cegah kendaraan yang sama dimasukkan dua kali ke keranjang aktif.
+$stmt = $this->db->prepare(
+"SELECT 1
+FROM t_pilih
+WHERE kode_sewa = ?
+AND no_plat = ?
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pemeriksaan kendaraan dalam keranjang gagal disiapkan.'
+);
+}
+$stmt->bind_param('ss', $kodeSewa, $noPlat);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pemeriksaan kendaraan dalam keranjang gagal dijalankan.'
+);
+}
+$kendaraanSudahDipilih =
+$stmt->get_result()->fetch_assoc() !== null;
+$stmt->close();
+if ($kendaraanSudahDipilih) {
+throw new RuntimeException(
+'Kendaraan sudah ada dalam keranjang ini.'
+);
+}
+$hari = $this->hitungHariSewa($tglMulai, $tglSelesai);
+$stmt = $this->db->prepare(
+"INSERT INTO t_pilih (
+kode_sewa,
+no_plat,
+hrg_sewa,
+n_hari
+) VALUES (?, ?, ?, ?)"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Detail transaksi gagal disiapkan.'
+);
+}
+$harga = (int) $kendaraan['hrg_hari'];
+$stmt->bind_param(
+'ssii',
+$kodeSewa,
+$noPlat,
+$harga,
+$hari
+);
+if (!$stmt->execute()) {
+$errno = $stmt->errno;
+$stmt->close();
+if ($errno === 1062) {
+throw new RuntimeException(
+'Kendaraan sudah ada dalam keranjang ini.'
+);
+}
+throw new RuntimeException(
+'Kendaraan gagal ditambahkan ke keranjang.'
+);
+}
+$stmt->close();
+$this->db->commit();
+if ($namaKunci !== null) {
+$this->lepasKunci($namaKunci);
+$namaKunci = null;
+}
+if ($kunciKeranjangDidapat && $namaKunciKeranjang !== null) {
+$this->lepasKunci($namaKunciKeranjang);
+$kunciKeranjangDidapat = false;
+}
+return $kodeSewa;
+} catch (Throwable $e) {
+$this->db->rollback();
+if ($namaKunci !== null) {
+$this->lepasKunci($namaKunci);
+}
+if ($kunciKeranjangDidapat && $namaKunciKeranjang !== null) {
+$this->lepasKunci($namaKunciKeranjang);
+}
+throw $e;
+}
+}
+
+private function validasiWaktuMulai(
+string $tglMulai,
+string $wktAmbil
+): void {
+$zonaWaktu = new \DateTimeZone('Asia/Jakarta');
+$sekarangMinimum = (new \DateTimeImmutable('now', $zonaWaktu))
+->modify('+2 hours');
+$waktuMulai = \DateTimeImmutable::createFromFormat(
+'!Y-m-d H:i:s',
+$tglMulai . ' ' . $this->normalisasiWaktu($wktAmbil),
+$zonaWaktu
+);
+if ($waktuMulai === false || $waktuMulai < $sekarangMinimum) {
+    throw new InvalidArgumentException(
+'Waktu pengambilan harus minimal dua jam dari sekarang (Asia/Jakarta).'
+);
+}
+}
+public function perbaruiPeriodeKeranjang(
+string $kodeSewa,
+string $userPlg,
+string $tglMulai,
+string $tglSelesai,
+string $wktAmbil
+): bool {
+$kodeSewa = trim($kodeSewa);
+$userPlg = trim($userPlg);
+if ($kodeSewa === '' || $userPlg === '') {
+throw new InvalidArgumentException(
+'Kode transaksi dan identitas penyewa wajib diisi.'
+);
+}
+$hari = $this->hitungHariSewa($tglMulai, $tglSelesai);
+$wktAmbil = $this->normalisasiWaktu($wktAmbil);
+$this->validasiWaktuMulai($tglMulai, $wktAmbil);
+$this->db->begin_transaction();
+try {
+$stmt = $this->db->prepare(
+"SELECT kode_sewa
+FROM t_sewa
+WHERE kode_sewa = ?
+AND user_plg = ?
+AND status_sewa = 'keranjang'
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pemeriksaan kepemilikan keranjang gagal disiapkan.'
+);
+}
+$stmt->bind_param('ss', $kodeSewa, $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pemeriksaan kepemilikan keranjang gagal dijalankan.'
+);
+}
+$header = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ($header === null) {
+throw new RuntimeException(
+'Keranjang tidak ditemukan atau statusnya tidak valid.'
+);
+}
+$stmt = $this->db->prepare(
+"UPDATE t_sewa
+SET tgl_mulai = ?, tgl_selesai = ?, wkt_ambil = ?
+WHERE kode_sewa = ?
+AND user_plg = ?
+AND status_sewa = 'keranjang'"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembaruan periode transaksi gagal disiapkan.'
+);
+}
+$stmt->bind_param(
+'sssss',
+$tglMulai,
+$tglSelesai,
+$wktAmbil,
+$kodeSewa,
+$userPlg
+);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pembaruan periode transaksi gagal dijalankan.'
+);
+}
+$stmt->close();
+$stmt = $this->db->prepare(
+'UPDATE t_pilih SET n_hari = ? WHERE kode_sewa = ?'
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembaruan durasi detail gagal disiapkan.'
+);
+}
+$stmt->bind_param('is', $hari, $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pembaruan durasi detail gagal dijalankan.'
+);
+}
+$stmt->close();
+$this->db->commit();
+return true;
+} catch (\Throwable $e) {
+$this->db->rollback();
+throw $e;
+}
+}
+public function getKeranjang(
+string $kodeSewa,
+string $userPlg
+): ?array {
+$stmt = $this->db->prepare(
+"SELECT
+kode_sewa,
+tgl_mulai,
+tgl_selesai,
+wkt_ambil,
+status_sewa,
+user_plg
+FROM t_sewa
+WHERE kode_sewa = ?
+AND user_plg = ?
+AND status_sewa = 'keranjang'
+LIMIT 1"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pengambilan header keranjang gagal disiapkan.'
+);
+}
+$stmt->bind_param('ss', $kodeSewa, $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pengambilan header keranjang gagal dijalankan.'
+);
+}
+$header = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ($header === null) {
+return null;
+}
+$stmt = $this->db->prepare(
+"SELECT
+p.kode_sewa,
+p.no_plat,
+p.hrg_sewa,
+p.n_hari,
+m.nm_mobil,
+m.ft_depan,
+m.status_unit
+FROM t_pilih p
+INNER JOIN t_mobil m ON m.no_plat = p.no_plat
+WHERE p.kode_sewa = ?
+ORDER BY m.nm_mobil ASC"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pengambilan detail keranjang gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pengambilan detail keranjang gagal dijalankan.'
+);
+}
+$detail = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+$header['detail'] = $detail;
+$header['total'] = 0;
+foreach ($detail as $item) {
+$header['total'] += (int) $item['hrg_sewa'] * (int) $item['n_hari'];
+}
+return $header;
+}
+public function hapusDariKeranjang(
+string $kodeSewa,
+string $userPlg,
+string $noPlat
+): bool {
+$stmt = $this->db->prepare(
+"DELETE p
+FROM t_pilih p
+INNER JOIN t_sewa s ON s.kode_sewa = p.kode_sewa
+WHERE p.kode_sewa = ?
+AND p.no_plat = ?
+AND s.user_plg = ?
+AND s.status_sewa = 'keranjang'"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Penghapusan detail keranjang gagal disiapkan.'
+);
+}
+$stmt->bind_param('sss', $kodeSewa, $noPlat, $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Kendaraan gagal dihapus dari keranjang.'
+);
+}
+$berhasil = $stmt->affected_rows === 1;
+$stmt->close();
+return $berhasil;
+}
+public function checkout(
+string $kodeSewa,
+string $userPlg
+): bool {
+$this->db->begin_transaction();
+try {
+// Baca awal header tanpa mengunci baris.
+$stmt = $this->db->prepare(
+"SELECT
+kode_sewa,
+tgl_mulai,
+tgl_selesai,
+wkt_ambil,
+status_sewa
+FROM t_sewa
+WHERE kode_sewa = ?
+AND user_plg = ?
+LIMIT 1"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembacaan awal transaksi checkout gagal disiapkan.'
+);
+}
+$stmt->bind_param('ss', $kodeSewa, $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pembacaan awal transaksi checkout gagal dijalankan.'
+);
+}
+$headerAwal = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if (
+$headerAwal === null ||
+$headerAwal['status_sewa'] !== 'keranjang'
+) {
+throw new RuntimeException(
+'Keranjang tidak ditemukan atau statusnya tidak valid.'
+);
+}
+$hariSeharusnya = $this->hitungHariSewa(
+$headerAwal['tgl_mulai'],
+$headerAwal['tgl_selesai']
+);
+$this->normalisasiWaktu($headerAwal['wkt_ambil']);
+// Ambil daftar kendaraan dan urutkan sebelum menguncinya.
+$stmt = $this->db->prepare(
+"SELECT no_plat
+FROM t_pilih
+WHERE kode_sewa = ?
+ORDER BY no_plat ASC"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembacaan detail checkout gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pembacaan detail checkout gagal dijalankan.'
+);
+}
+$daftarAwal = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+if (count($daftarAwal) === 0) {
+throw new RuntimeException(
+'Keranjang kosong dan tidak dapat di-checkout.'
+);
+}
+foreach ($daftarAwal as $baris) {
+$kendaraan = $this->kunciKendaraan($baris['no_plat']);
+if ($kendaraan['status_unit'] !== 'tersedia') {
+throw new RuntimeException(
+'Salah satu kendaraan tidak berstatus tersedia.'
+);
+}
+}
+// Setelah kendaraan terkunci, kunci ulang header.
+$stmt = $this->db->prepare(
+"SELECT
+kode_sewa,
+tgl_mulai,
+tgl_selesai,
+wkt_ambil,
+status_sewa
+FROM t_sewa
+WHERE kode_sewa = ?
+AND user_plg = ?
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Penguncian header checkout gagal disiapkan.'
+);
+}
+$stmt->bind_param('ss', $kodeSewa, $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Penguncian header checkout gagal dijalankan.'
+);
+}
+$header = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if (
+$header === null ||
+$header['status_sewa'] !== 'keranjang' ||
+$header['tgl_mulai'] !== $headerAwal['tgl_mulai'] ||
+$header['tgl_selesai'] !== $headerAwal['tgl_selesai'] ||
+$header['wkt_ambil'] !== $headerAwal['wkt_ambil']
+) {
+throw new RuntimeException(
+'Header keranjang berubah atau statusnya tidak valid.'
+);
+}
+// Baca ulang detail setelah header dikunci.
+$stmt = $this->db->prepare(
+"SELECT
+p.no_plat,
+p.hrg_sewa,
+p.n_hari,
+m.status_unit
+FROM t_pilih p
+INNER JOIN t_mobil m ON m.no_plat = p.no_plat
+WHERE p.kode_sewa = ?
+ORDER BY p.no_plat ASC
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Validasi detail checkout gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Validasi detail checkout gagal dijalankan.'
+);
+}
+$detail = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+if (count($detail) === 0) {
+throw new RuntimeException(
+'Keranjang kosong dan tidak dapat di-checkout.'
+
+);
+}
+$platAwal = array_column($daftarAwal, 'no_plat');
+$platAkhir = array_column($detail, 'no_plat');
+if ($platAwal !== $platAkhir) {
+throw new RuntimeException(
+'Detail keranjang berubah selama checkout. Silakan coba lagi.'
+);
+}
+foreach ($detail as $item) {
+if ((int) $item['n_hari'] !== $hariSeharusnya) {
+throw new RuntimeException(
+'Lama sewa detail tidak konsisten dengan periode transaksi.'
+);
+}
+// Aturan P7: status kendaraan saja yang menentukan kelayakan.
+if ($item['status_unit'] !== 'tersedia') {
+throw new RuntimeException(
+'Salah satu kendaraan tidak berstatus tersedia.'
+);
+}
+}
+// Buat record pembayaran DP dalam transaksi database yang sama.
+$hasilTanggal = $this->db->query(
+"SELECT DATE_FORMAT(NOW(), '%Y%m%d') AS tanggal_kode,
+NOW() AS waktu_konfirmasi"
+);
+if (!$hasilTanggal) {
+throw new RuntimeException(
+'Tanggal konfirmasi pembayaran DP gagal dibaca.'
+);
+}
+
+$waktuKonfirmasi = $hasilTanggal->fetch_assoc();
+$hasilTanggal->free();
+$tanggalKode = (string) ($waktuKonfirmasi['tanggal_kode'] ?? '');
+$tglWktBayar = (string) ($waktuKonfirmasi['waktu_konfirmasi'] ?? '');
+if (!preg_match('/^\d{8}$/', $tanggalKode) || $tglWktBayar === '') {
+throw new RuntimeException(
+'Tanggal konfirmasi pembayaran DP tidak valid.'
+);
+}
+// Pastikan transaksi ini belum memiliki record DP.
+$stmt = $this->db->prepare(
+"SELECT kode_bayar
+FROM t_bayar
+WHERE kode_sewa = ? AND jns_byr = 'dp'
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException('Pemeriksaan pembayaran DP gagal disiapkan.');
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException('Pemeriksaan pembayaran DP gagal dijalankan.');
+}
+$pembayaranDpAda = $stmt->get_result()->fetch_assoc() !== null;
+$stmt->close();
+if ($pembayaranDpAda) {
+throw new RuntimeException('Record pembayaran DP untuk transaksi ini sudah tersedia.');
+}
+// Ambil nomor terakhir pada tanggal server database.
+$polaKodeBayar = 'PAY/' . $tanggalKode . '/%';
+$stmt = $this->db->prepare(
+"SELECT kode_bayar
+FROM t_bayar
+WHERE kode_bayar LIKE ?
+ORDER BY kode_bayar DESC
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException('Pembuatan kode pembayaran gagal disiapkan.');
+}
+$stmt->bind_param('s', $polaKodeBayar);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException('Pembuatan kode pembayaran gagal dijalankan.');
+}
+$pembayaranTerakhir = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+$nomorBerikutnya = 1;
+if ($pembayaranTerakhir !== null) {
+$bagianKode = explode('/', (string) $pembayaranTerakhir['kode_bayar']);
+$nomorBerikutnya = ((int) end($bagianKode)) + 1;
+}
+
+if ($nomorBerikutnya > 99) {
+throw new RuntimeException('Nomor pembayaran harian telah mencapai batas 99.');
+}
+$kodeBayar = sprintf('PAY/%s/%02d', $tanggalKode, $nomorBerikutnya);
+$totalSewa = 0;
+foreach ($detail as $item) {
+$totalSewa += (int) $item['hrg_sewa'] * (int) $item['n_hari'];
+}
+$nominalDp = (int) round($totalSewa * 30 / 100);
+if ($nominalDp <= 0) {
+throw new RuntimeException('Nominal pembayaran DP harus lebih besar dari nol.');
+}
+$stmt = $this->db->prepare(
+"INSERT INTO t_bayar
+(kode_bayar, tgl_wkt_byr, ft_byr, mtode_byr, jns_byr,
+nominal, sttus_byr, tgl_wkt_ver, kode_sewa)
+VALUES (?, ?, NULL, 'transfer', 'dp', ?, 'pending', NULL, ?)"
+);
+if (!$stmt) {
+throw new RuntimeException('Pencatatan pembayaran DP gagal disiapkan.');
+}
+$stmt->bind_param('ssis', $kodeBayar, $tglWktBayar, $nominalDp, $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException('Pencatatan pembayaran DP gagal disimpan.');
+}
+$stmt->close();
+$stmt = $this->db->prepare(
+"UPDATE t_sewa
+SET status_sewa = 'diajukan'
+WHERE kode_sewa = ?
+AND user_plg = ?
+AND status_sewa = 'keranjang'"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Perubahan status checkout gagal disiapkan.'
+);
+}
+$stmt->bind_param('ss', $kodeSewa, $userPlg);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException('Status transaksi gagal diperbarui.');
+}
+$berhasil = $stmt->affected_rows === 1;
+$stmt->close();
+if (!$berhasil) {
+throw new RuntimeException(
+'Status transaksi tidak berubah; checkout dibatalkan.'
+);
+}
+$this->db->commit();
+return true;
+} catch (\Throwable $e) {
+$this->db->rollback();
+throw $e;
+}
+}
+public function getKodeKeranjangAktif(string $userPlg): ?string
+{
+$userPlg = trim($userPlg);
+if ($userPlg === '') {
+return null;
+}
+$stmt = $this->db->prepare(
+"SELECT kode_sewa
+FROM t_sewa
+WHERE user_plg = ?
+AND status_sewa = 'keranjang'
+ORDER BY kode_sewa ASC
+LIMIT 1"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pencarian kode keranjang aktif gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $userPlg);
+if (!$stmt->execute()) {
+    $stmt->close();
+throw new RuntimeException(
+'Pencarian kode keranjang aktif gagal dijalankan.'
+);
+}
+$hasil = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+return $hasil === null
+? null
+: (string) $hasil['kode_sewa'];
+}
+
+public function getPembayaranPenyewa(string $userPlg): array
+{
+    $stmt = $this->db->prepare(
+        "SELECT
+            b.kode_bayar,
+            b.tgl_wkt_byr,
+            b.ft_byr,
+            b.mtode_byr,
+            b.jns_byr,
+            b.nominal,
+            b.sttus_byr,
+            b.tgl_wkt_ver,
+            s.kode_sewa,
+            s.tgl_mulai,
+            s.tgl_selesai,
+            s.status_sewa
+        FROM t_bayar b
+        INNER JOIN t_sewa s
+            ON s.kode_sewa = b.kode_sewa
+        WHERE s.user_plg = ?
+        ORDER BY b.tgl_wkt_byr DESC"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException(
+            'Data pembayaran gagal disiapkan.'
+        );
+    }
+
+    $stmt->bind_param('s', $userPlg);
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+        throw new RuntimeException(
+            'Data pembayaran gagal diambil.'
+        );
+    }
+
+    $hasil = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+
+    return $hasil;
+}
+
+public function getDetailPembayaranPenyewa(
+    string $kodeBayar,
+    string $userPlg
+): ?array {
+    $stmt = $this->db->prepare(
+        "SELECT b.kode_bayar, b.ft_byr, b.sttus_byr, s.user_plg
+         FROM t_bayar b
+         INNER JOIN t_sewa s ON s.kode_sewa = b.kode_sewa
+         WHERE b.kode_bayar = ?
+           AND s.user_plg = ?
+         LIMIT 1"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException('Pemeriksaan pembayaran gagal disiapkan.');
+    }
+
+    $stmt->bind_param('ss', $kodeBayar, $userPlg);
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+        throw new RuntimeException('Pemeriksaan pembayaran gagal dijalankan.');
+    }
+
+    $hasil = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    return $hasil ?: null;
+}
+
+public function simpanBuktiPembayaran(
+    string $kodeBayar,
+    string $userPlg,
+    string $namaFile
+): bool {
+    $stmt = $this->db->prepare(
+        "UPDATE t_bayar b
+         INNER JOIN t_sewa s ON s.kode_sewa = b.kode_sewa
+         SET b.ft_byr = ?, b.tgl_wkt_byr = NOW()
+         WHERE b.kode_bayar = ?
+           AND s.user_plg = ?
+           AND b.sttus_byr = 'pending'"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException('Penyimpanan bukti pembayaran gagal disiapkan.');
+    }
+
+    $stmt->bind_param('sss', $namaFile, $kodeBayar, $userPlg);
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+        throw new RuntimeException('Bukti pembayaran gagal disimpan.');
+    }
+
+    $berhasil = $stmt->affected_rows === 1;
+    $stmt->close();
+
+    return $berhasil;
+}
+
+public function getPembayaranMenungguVerifikasi(): array
+{
+    $stmt = $this->db->prepare(
+        "SELECT
+            b.kode_bayar,
+            b.tgl_wkt_byr,
+            b.ft_byr,
+            b.mtode_byr,
+            b.jns_byr,
+            b.nominal,
+            b.sttus_byr,
+            b.kode_sewa,
+            s.tgl_mulai,
+            s.tgl_selesai,
+            s.status_sewa,
+            s.user_plg,
+            p.nm_lngkp,
+            p.no_hp
+        FROM t_bayar b
+        INNER JOIN t_sewa s
+            ON s.kode_sewa = b.kode_sewa
+        INNER JOIN t_penyewa p
+            ON p.user_plg = s.user_plg
+        WHERE b.sttus_byr = 'pending'
+          AND b.ft_byr IS NOT NULL
+          AND b.ft_byr <> ''
+        ORDER BY b.tgl_wkt_byr ASC"
+    );
+
+    if (!$stmt || !$stmt->execute()) {
+        throw new RuntimeException(
+            'Daftar pembayaran gagal diambil.'
+        );
+    }
+
+    $hasil = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+
+    return $hasil;
+}
+
+public function verifikasiPembayaran(
+    string $kodeBayar,
+    string $aksi
+): bool {
+    if (!in_array($aksi, ['terima', 'tolak'], true)) {
+        throw new InvalidArgumentException(
+            'Pilihan verifikasi tidak valid.'
+        );
+    }
+
+    $statusBayar = $aksi === 'terima' ? 'valid' : 'invalid';
+    $statusSewa = $aksi === 'terima' ? 'disetujui' : 'ditolak';
+
+    $this->db->begin_transaction();
+
+    try {
+        // Kunci data agar tidak diverifikasi dua kali secara bersamaan.
+        $stmt = $this->db->prepare(
+            "SELECT
+                b.ft_byr,
+                b.sttus_byr,
+                s.status_sewa
+            FROM t_bayar b
+            INNER JOIN t_sewa s
+                ON s.kode_sewa = b.kode_sewa
+            WHERE b.kode_bayar = ?
+            FOR UPDATE"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException(
+                'Pemeriksaan pembayaran gagal disiapkan.'
+            );
+        }
+
+        $stmt->bind_param('s', $kodeBayar);
+        $stmt->execute();
+
+        $data = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if ($data === null) {
+            throw new InvalidArgumentException(
+                'Data pembayaran tidak ditemukan.'
+            );
+        }
+
+        if (
+            $data['sttus_byr'] !== 'pending' ||
+            empty($data['ft_byr'])
+        ) {
+            throw new InvalidArgumentException(
+                'Pembayaran belum memiliki bukti atau sudah diverifikasi.'
+            );
+        }
+
+        // Perbarui status pembayaran.
+        $stmt = $this->db->prepare(
+            "UPDATE t_bayar
+             SET sttus_byr = ?,
+                 tgl_wkt_ver = NOW()
+             WHERE kode_bayar = ?
+               AND sttus_byr = 'pending'
+               AND ft_byr IS NOT NULL
+               AND ft_byr <> ''"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException(
+                'Pembaruan status pembayaran gagal disiapkan.'
+            );
+        }
+
+        $stmt->bind_param('ss', $statusBayar, $kodeBayar);
+
+        if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+            $stmt->close();
+            throw new RuntimeException(
+                'Status pembayaran gagal diperbarui.'
+            );
+        }
+
+        $stmt->close();
+
+        // Perbarui status transaksi.
+        $stmt = $this->db->prepare(
+            "UPDATE t_sewa s
+             INNER JOIN t_bayar b
+                ON b.kode_sewa = s.kode_sewa
+             SET s.status_sewa = ?
+             WHERE b.kode_bayar = ?
+               AND s.status_sewa = 'diajukan'"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException(
+                'Pembaruan status transaksi gagal disiapkan.'
+            );
+        }
+
+        $stmt->bind_param('ss', $statusSewa, $kodeBayar);
+
+        if (!$stmt->execute() || $stmt->affected_rows !== 1) {
+            $stmt->close();
+            throw new RuntimeException(
+                'Status transaksi gagal diperbarui.'
+            );
+        }
+
+        $stmt->close();
+
+        $this->db->commit();
+
+        return true;
+
+    } catch (Throwable $e) {
+        $this->db->rollback();
+        throw $e;
+    }
+}
+
+/**
+* P10: Mengambil daftar transaksi yang dapat diproses pelunasannya.
+*
+* Total transaksi menggunakan snapshot tarif pada t_pilih.
+* Pembayaran yang mengurangi kewajiban hanya yang berstatus valid.
+*/
+
+/**
+ * P10: Mengambil daftar transaksi yang masih dapat diproses pelunasannya.
+ *
+ * Hanya transaksi berstatus disetujui yang memiliki sisa kewajiban
+ * dan belum memiliki record pembayaran pelunasan yang ditampilkan.
+ */
+public function getDaftarPelunasan(): array
+{
+    $stmt = $this->db->prepare(
+        "SELECT
+            s.kode_sewa,
+            s.tgl_mulai,
+            s.tgl_selesai,
+            s.status_sewa,
+            p.user_plg,
+            p.nm_lngkp,
+            p.no_hp,
+            COALESCE((
+                SELECT SUM(tp.hrg_sewa * tp.n_hari)
+                FROM t_pilih tp
+                WHERE tp.kode_sewa = s.kode_sewa
+            ), 0) AS total_transaksi,
+            COALESCE((
+                SELECT SUM(b.nominal)
+                FROM t_bayar b
+                WHERE b.kode_sewa = s.kode_sewa
+                  AND b.sttus_byr = 'valid'
+            ), 0) AS total_terbayar
+        FROM t_sewa s
+        INNER JOIN t_penyewa p
+            ON p.user_plg = s.user_plg
+        WHERE s.status_sewa = 'disetujui'
+          AND EXISTS (
+              SELECT 1
+              FROM t_pilih tp
+              WHERE tp.kode_sewa = s.kode_sewa
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM t_bayar b
+              WHERE b.kode_sewa = s.kode_sewa
+                AND b.jns_byr = 'pelunasan'
+          )
+        ORDER BY s.tgl_mulai DESC, s.kode_sewa DESC"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException(
+            'Query daftar pelunasan gagal disiapkan.'
+        );
+    }
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+
+        throw new RuntimeException(
+            'Daftar pelunasan gagal diambil.'
+        );
+    }
+
+    $daftar = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+
+    foreach ($daftar as &$item) {
+        $item['total_transaksi'] = (int) $item['total_transaksi'];
+        $item['total_terbayar'] = (int) $item['total_terbayar'];
+
+        $item['sisa_kewajiban'] = max(
+            0,
+            $item['total_transaksi'] - $item['total_terbayar']
+        );
+    }
+
+    unset($item);
+
+    // Tampilkan hanya transaksi yang masih memiliki sisa kewajiban.
+    return array_values(array_filter(
+        $daftar,
+        static fn(array $item): bool =>
+            $item['sisa_kewajiban'] > 0
+    ));
+}
+
+/**
+* P10: Mengambil detail transaksi, penyewa, dan riwayat pembayaran
+* untuk halaman pelunasan.
+*/
+public function getDetailPelunasan(string $kodeSewa): ?array
+{
+$kodeSewa = trim($kodeSewa);
+if ($kodeSewa === '') {
+throw new InvalidArgumentException(
+'Kode transaksi sewa wajib diisi.'
+);
+}
+$stmt = $this->db->prepare(
+"SELECT
+s.kode_sewa,
+s.tgl_mulai,
+s.tgl_selesai,
+s.wkt_ambil,
+s.status_sewa,
+p.user_plg,
+p.nm_lngkp,
+p.no_hp,
+p.nik,
+p.almt_lngkp,
+COALESCE((
+SELECT SUM(tp.hrg_sewa * tp.n_hari)
+FROM t_pilih tp
+WHERE tp.kode_sewa = s.kode_sewa
+), 0) AS total_transaksi,
+COALESCE((
+SELECT SUM(b.nominal)
+FROM t_bayar b
+WHERE b.kode_sewa = s.kode_sewa
+AND b.sttus_byr = 'valid'
+), 0) AS total_terbayar
+FROM t_sewa s
+INNER JOIN t_penyewa p
+ON p.user_plg = s.user_plg
+WHERE s.kode_sewa = ?
+LIMIT 1"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Query detail pelunasan gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Detail transaksi pelunasan gagal diambil.'
+);
+}
+$detail = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ($detail === null) {
+return null;
+}
+$detail['total_transaksi'] = (int) $detail['total_transaksi'];
+$detail['total_terbayar'] = (int) $detail['total_terbayar'];
+$detail['sisa_kewajiban'] = max(
+0,
+$detail['total_transaksi'] - $detail['total_terbayar']
+);
+$stmt = $this->db->prepare(
+"SELECT
+kode_bayar,
+tgl_wkt_byr,
+mtode_byr,
+jns_byr,
+nominal,
+sttus_byr,
+ft_byr,
+tgl_wkt_ver
+FROM t_bayar
+WHERE kode_sewa = ?
+ORDER BY tgl_wkt_byr ASC, kode_bayar ASC"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Query riwayat pembayaran gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Riwayat pembayaran gagal diambil.'
+);
+}
+$detail['riwayat_pembayaran'] =
+$stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+$stmt = $this->db->prepare(
+"SELECT
+m.no_plat,
+m.nm_mobil,
+tp.hrg_sewa,
+tp.n_hari,
+(tp.hrg_sewa * tp.n_hari) AS subtotal
+FROM t_pilih tp
+INNER JOIN t_mobil m
+ON m.no_plat = tp.no_plat
+WHERE tp.kode_sewa = ?
+ORDER BY m.nm_mobil ASC, m.no_plat ASC"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Query detail kendaraan pelunasan gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Detail kendaraan pelunasan gagal diambil.'
+);
+}
+$detail['daftar_kendaraan'] =
+$stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+return $detail;
+}
+
+/**
+* P10: Membuat kode pembayaran dengan format PAY/YYYYMMDD/NN.
+* Pemanggil harus memegang named lock pembayaran harian.
+*/
+private function buatKodeBayarPelunasan(string $tanggalKode): string
+{
+$pola = 'PAY/' . $tanggalKode . '/%';
+$stmt = $this->db->prepare(
+"SELECT kode_bayar
+FROM t_bayar
+WHERE kode_bayar LIKE ?
+ORDER BY kode_bayar DESC
+LIMIT 1"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembuatan kode pembayaran gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $pola);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pembuatan kode pembayaran gagal dijalankan.'
+);
+}
+$terakhir = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+$nomorBerikutnya = 1;
+if ($terakhir !== null) {
+$bagianKode = explode('/', (string) $terakhir['kode_bayar']);
+$nomorBerikutnya = ((int) end($bagianKode)) + 1;
+}
+if ($nomorBerikutnya > 99) {
+throw new RuntimeException(
+'Nomor pembayaran harian telah mencapai batas 99.'
+);
+}
+return sprintf('PAY/%s/%02d', $tanggalKode, $nomorBerikutnya);
+}
+
+/**
+* P10: Mencatat pelunasan langsung oleh admin.
+*
+* Pembayaran langsung dicatat sebagai valid.
+* Status transaksi diperbarui menjadi lunas dalam transaksi database
+* yang sama. Status kendaraan tidak diubah pada P10.
+*/
+public function simpanPelunasan(
+string $kodeSewa,
+string $metodeBayar,
+?string $namaFileBukti = null
+): string {
+$kodeSewa = trim($kodeSewa);
+$metodeBayar = trim($metodeBayar);
+if ($kodeSewa === '') {
+throw new InvalidArgumentException(
+'Kode transaksi sewa wajib diisi.'
+);
+}
+if (!in_array($metodeBayar, ['tunai', 'transfer'], true)) {
+throw new InvalidArgumentException(
+'Metode pembayaran tidak valid.'
+);
+}
+if ($metodeBayar === 'transfer') {
+$namaFileBukti = trim((string) $namaFileBukti);
+if ($namaFileBukti === '') {
+throw new InvalidArgumentException(
+'Bukti transfer wajib tersedia.'
+);
+}
+} else {
+$namaFileBukti = null;
+}
+// Harus sama dengan kunci yang digunakan Transaksi_model::checkout()
+// ketika membuat kode pembayaran DP.
+$namaKunci = 'dpwl_payment_code_sequence';
+$kunciDiperoleh = false;
+$transaksiDimulai = false;
+try {
+$stmt = $this->db->prepare(
+'SELECT GET_LOCK(?, 10) AS lock_status'
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Kunci pembuatan kode pembayaran gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $namaKunci);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Kunci pembuatan kode pembayaran gagal dijalankan.'
+);
+}
+$hasilKunci = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ((int) ($hasilKunci['lock_status'] ?? 0) !== 1) {
+throw new RuntimeException(
+'Proses pembayaran sedang digunakan. Silakan coba kembali.'
+);
+}
+$kunciDiperoleh = true;
+$this->db->begin_transaction();
+$transaksiDimulai = true;
+// Kunci transaksi agar dua permintaan pelunasan tidak berjalan
+// bersamaan untuk transaksi yang sama.
+$stmt = $this->db->prepare(
+"SELECT
+s.kode_sewa,
+s.status_sewa,
+COALESCE((
+SELECT SUM(tp.hrg_sewa * tp.n_hari)
+FROM t_pilih tp
+WHERE tp.kode_sewa = s.kode_sewa
+), 0) AS total_transaksi,
+COALESCE((
+SELECT SUM(b.nominal)
+FROM t_bayar b
+WHERE b.kode_sewa = s.kode_sewa
+AND b.sttus_byr = 'valid'
+), 0) AS total_terbayar
+FROM t_sewa s
+WHERE s.kode_sewa = ?
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pemeriksaan transaksi pelunasan gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pemeriksaan transaksi pelunasan gagal dijalankan.'
+);
+}
+$transaksi = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+if ($transaksi === null) {
+throw new RuntimeException(
+'Transaksi sewa tidak ditemukan.'
+);
+}
+if (!in_array(
+$transaksi['status_sewa'],
+['disetujui', 'lunas'],
+true
+)) {
+throw new RuntimeException(
+'Status transaksi belum memenuhi syarat pelunasan.'
+);
+}
+
+$totalTransaksi = (int) $transaksi['total_transaksi'];
+$totalTerbayar = (int) $transaksi['total_terbayar'];
+$sisaKewajiban = $totalTransaksi - $totalTerbayar;
+if ($totalTransaksi <= 0 || $sisaKewajiban <= 0) {
+throw new RuntimeException(
+'Transaksi tidak memiliki sisa kewajiban untuk dilunasi.'
+);
+}
+if ($sisaKewajiban > 8388607) {
+throw new RuntimeException(
+'Sisa kewajiban melebihi kapasitas kolom nominal pada database.'
+);
+}
+// Pastikan transaksi belum memiliki record pelunasan.
+$stmt = $this->db->prepare(
+"SELECT kode_bayar
+FROM t_bayar
+WHERE kode_sewa = ?
+AND jns_byr = 'pelunasan'
+LIMIT 1
+FOR UPDATE"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pemeriksaan pelunasan sebelumnya gagal disiapkan.'
+);
+}
+
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pemeriksaan pelunasan sebelumnya gagal dijalankan.'
+);
+}
+$pelunasanAda = $stmt->get_result()->fetch_assoc() !== null;
+$stmt->close();
+if ($pelunasanAda) {
+throw new RuntimeException(
+'Transaksi ini sudah memiliki record pelunasan.'
+);
+}
+$hasilWaktu = $this->db->query(
+"SELECT
+DATE_FORMAT(NOW(), '%Y%m%d') AS tanggal_kode,
+NOW() AS waktu_pembayaran"
+);
+if (!$hasilWaktu) {
+throw new RuntimeException(
+'Waktu pembayaran gagal dibaca.'
+);
+}
+
+$waktu = $hasilWaktu->fetch_assoc();
+$hasilWaktu->free();
+$tanggalKode = (string) ($waktu['tanggal_kode'] ?? '');
+$waktuPembayaran = (string) ($waktu['waktu_pembayaran'] ?? '');
+if (
+!preg_match('/^\d{8}$/', $tanggalKode) ||
+$waktuPembayaran === ''
+) {
+throw new RuntimeException(
+'Waktu pembayaran tidak valid.'
+);
+}
+$kodeBayar = $this->buatKodeBayarPelunasan($tanggalKode);
+$stmt = $this->db->prepare(
+"INSERT INTO t_bayar (
+kode_bayar,
+tgl_wkt_byr,
+ft_byr,
+mtode_byr,
+jns_byr,
+nominal,
+sttus_byr,
+tgl_wkt_ver,
+kode_sewa
+) VALUES (?, ?, ?, ?, 'pelunasan', ?, 'valid', NOW(), ?)"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pencatatan pelunasan gagal disiapkan.'
+);
+}
+
+$stmt->bind_param(
+'ssssis',
+$kodeBayar,
+$waktuPembayaran,
+$namaFileBukti,
+$metodeBayar,
+$sisaKewajiban,
+$kodeSewa
+);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Pelunasan gagal disimpan.'
+);
+}
+$stmt->close();
+// Pelunasan berhasil dicatat; perbarui status transaksi
+// dalam transaksi database yang sama.
+$stmt = $this->db->prepare(
+"UPDATE t_sewa
+SET status_sewa = 'lunas'
+WHERE kode_sewa = ?
+AND status_sewa IN ('disetujui', 'lunas')"
+);
+if (!$stmt) {
+throw new RuntimeException(
+'Pembaruan status transaksi menjadi lunas gagal disiapkan.'
+);
+}
+$stmt->bind_param('s', $kodeSewa);
+if (!$stmt->execute()) {
+$stmt->close();
+throw new RuntimeException(
+'Status transaksi gagal diperbarui menjadi lunas.'
+);
+}
+
+if ($stmt->affected_rows !== 1) {
+$stmt->close();
+throw new RuntimeException(
+'Status transaksi tidak berubah menjadi lunas. '
+. 'Periksa kembali status transaksi.'
+);
+}
+$stmt->close();
+$this->db->commit();
+$transaksiDimulai = false;
+return $kodeBayar;
+} catch (Throwable $e) {
+if ($transaksiDimulai) {
+$this->db->rollback();
+}
+throw $e;
+} finally {
+if ($kunciDiperoleh) {
+$stmt = $this->db->prepare(
+'SELECT RELEASE_LOCK(?)'
+);
+if ($stmt) {
+$stmt->bind_param('s', $namaKunci);
+$stmt->execute();
+$stmt->close();
+}
+}
+}
+}
+}
