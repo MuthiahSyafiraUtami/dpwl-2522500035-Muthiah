@@ -167,7 +167,7 @@ Selain itu, halaman ini menyediakan form untuk memproses pelunasan apabila trans
 
 ![Halaman Pembayaran](dokumentasi/Transaksi_Lunas_2.png)
 
-### 3. Halaman Detail Dokumen Sewa Kendaraan
+### 3. Halaman Detail Dokumen Transaksi Sewa Kendaraan
 ![Halaman Pembayaran](dokumentasi/Dokumen_Sewa_1.png)
 
 ![Halaman Pembayaran](dokumentasi/Dokumen_Sewa_2.png)
